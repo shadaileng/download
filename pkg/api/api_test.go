@@ -24,7 +24,7 @@ func _TestDownload(t *testing.T) {
 	}
 }
 
-func TestDownloadM3u8(t *testing.T) {
+func _TestDownloadM3u8(t *testing.T) {
 	// url := "https://la3.killcovid2021.com/m3u8/907823/907823.m3u8"
 	// url := "https://askzycdn.com/20231124/X55udrAS/2000kb/hls/index.m3u8"
 	url := "https://la3.killcovid2021.com/m3u8/907759/907759.m3u8"
@@ -39,14 +39,14 @@ func TestDownloadM3u8(t *testing.T) {
 }
 
 
-func _TestParseM3u8(t *testing.T) {
+func TestParseM3u8(t *testing.T) {
     // url := "https://la3.killcovid2021.com/m3u8/907823/907823.m3u8"
     // url := "https://askzycdn.com/20231124/X55udrAS/2000kb/hls/index.m3u8"
-    // url := "https://vip3.lbbf9.com/20231129/9PyUSSFA/index.m3u8"	
+    url := "https://vip3.lbbf9.com/20231129/9PyUSSFA/index.m3u8"	
     // url := "https://vip3.lbbf9.com/20231129/9PyUSSFA//700kb/hls/index.m3u8"	
     // url := "https://video56.zdavsp.com/video/20230613/6ab714fed9a9cb653d6eeec3937b70d6/index.m3u8"
     // url := "https://videozmwbf.0afaf5e.com/decry/vd/20231126/MDZhZmU0ND/151813/720/libx/hls/encrypt/index.m3u8"
-	url := "https://la3.killcovid2021.com/m3u8/907759/907759.m3u8"
+	// url := "https://la3.killcovid2021.com/m3u8/907759/907759.m3u8"
 	outpath := filepath.Join("/config/workspace/project/go/src/github.com/shadaileng/download/dist", 
 		utils.ResourcePath(url))
 	socks5Url := ""

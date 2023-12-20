@@ -16,6 +16,7 @@ import (
 	"log"
 	"runtime"
 	"slices"
+	"regexp"
 )
 
 
@@ -89,7 +90,9 @@ func ResourceDir(path string) string {
 }
 
 func CleanPath(path string) string {
-	return filepath.Clean(path)
+	re := regexp.MustCompile("/{2,}")
+	return re.ReplaceAllString(path, "/")
+	// return filepath.Clean(path)
 }
 
 func Exists(path string) bool {
