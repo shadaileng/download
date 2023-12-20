@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"net/http"
 	"path/filepath"
+	_"path"
 	"os"
 	"io"
 	"strconv"
@@ -61,7 +62,7 @@ func Outpath(distPath, Url string) string {
 	return filepath.Join(distPath, Format("%s%s", u.Host, u.Path))
 }
 func Dirname(path string) string {
-	return filepath.Dir(path)
+	return CleanPath(filepath.Dir(path))
 }
 
 func JoinPath(paths ...string) string {
@@ -90,7 +91,7 @@ func ResourceDir(path string) string {
 }
 
 func CleanPath(path string) string {
-	re := regexp.MustCompile("/{2,}")
+	re := regexp.MustCompile(`[\\/]{1,}`)
 	return re.ReplaceAllString(path, "/")
 	// return filepath.Clean(path)
 }
