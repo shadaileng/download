@@ -13,7 +13,11 @@ import (
 	"encoding/json"
 	"encoding/base64"
 	"errors"
+	"log"
+	"runtime"
+	"slices"
 )
+
 
 func trace() func() {
 	start := time.Now()
@@ -25,10 +29,27 @@ func trace() func() {
 }
 
 func Println(str string) {
-	fmt.Println(str)
+	_, file, line, _ := runtime.Caller(1)
+	log.Println(Format("%s:%d: ", file, line) + str)
 }
 func Printf(format string, args ...interface{}) {
-	fmt.Printf(format, args...)
+	if !Exists("/config/workspace/project/go/src/github.com/shadaileng/download/log") {
+		os.MkdirAll("/config/workspace/project/go/src/github.com/shadaileng/download/log", 0777)
+	}
+	logFile, err := os.OpenFile("/config/workspace/project/go/src/github.com/shadaileng/download/log/log.txt", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if err != nil {
+		log.Fatalf("error opening file: %v", err)
+		return
+	}
+	logger := log.New(io.MultiWriter(os.Stdout, logFile), "Download: ", log.LstdFlags | log.Ldate | log.Lmicroseconds)
+	if slices.Contains(os.Args[1:], "-debug") {
+		// log.SetFlags(log.LstdFlags | log.Lshortfile | log.Ldate | log.Lmicroseconds)
+		logger.SetPrefix("Debug: ")
+		// logger.Printf(format, args...)
+		_, file, line, _ := runtime.Caller(1)
+		format = Format("%s:%d: ", file, line) + format
+	}
+	logger.Printf(format, args...)
 }
 func Format(formatStr string, args ...interface{}) string {
 	return fmt.Sprintf(formatStr, args...)
@@ -55,9 +76,18 @@ func BasePath(path string) string {
 }
 
 func ResourceName(path string) string {
-	urlLine, _ := url.Parse(path)
-	return BasePath(urlLine.Path)
+	return BasePath(ResourcePath(path))
 }
+
+func ResourcePath(path string) string {
+	urlLine, _ := url.Parse(path)
+	return Format("%s/%s", urlLine.Host, CleanPath(urlLine.Path))
+}
+
+func ResourceDir(path string) string {
+	return Dirname(ResourcePath(path))
+}
+
 func CleanPath(path string) string {
 	return filepath.Clean(path)
 }
