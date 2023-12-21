@@ -1,21 +1,23 @@
 package api
 
 import (
-	"io"
-	"os"
-	"net"
-	"net/url"
-	"net/http"
-	"path/filepath"
-	"golang.org/x/net/proxy"
+	"context"
 	"crypto/tls"
 	"encoding/json"
-	"context"
-	"time"
-	"sync"
-	"github.com/shadaileng/download/pkg/utils"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
+	"time"
+
+	"github.com/shadaileng/download/pkg/utils"
+	"golang.org/x/net/proxy"
 )
+
 type NewInfoFunc func(*http.Client, string, string, chan *Info) (map[string]*Info, error)
 
 func downloadTask(httpClient *http.Client, info *Info, status chan *Info, wg *sync.WaitGroup) {
@@ -23,7 +25,7 @@ func downloadTask(httpClient *http.Client, info *Info, status chan *Info, wg *sy
 	wg.Add(1)
 
 	req, _ := http.NewRequest("GET", info.Url, nil)
-	start, end := info.Start+info.DownLen, info.Start+info.Length
+	start, end := info.Start+info.DownLen, info.Start+info.Length - int64(1)
 	if end > start {
 		req.Header.Set("Range", utils.Format("bytes=%v-%v", start, end))
 	}
@@ -61,25 +63,26 @@ func downloadTask(httpClient *http.Client, info *Info, status chan *Info, wg *sy
 	}
 	defer out.Close()
 	out.Seek(start, 0)
-	err = ReadBody(resp, out, func (data Info){
+	err = ReadBody(resp, out, func(data Info) {
 		// utils.Printf("status: %v\n", data)
-		info.Length = data.Length
-		info.DownLen = data.DownLen
+		// info.Length = data.Length
 		if data.Error != "" {
 			info.Status = -1
-			if info.Retry - 1 < 0 {
+			if info.Retry-1 < 0 {
 				info.Status = -2
 			} else {
 				info.Retry--
 			}
 			info.Error = data.Error
 			utils.Printf("[-][%v] %v", info.Key, info.Error)
+		} else {
+			info.DownLen += data.DownLen
 		}
 		status <- info
 	})
 	if err != nil {
 		info.Status = -1
-		if info.Retry - 1 < 0 {
+		if info.Retry-1 < 0 {
 			info.Status = -2
 		} else {
 			info.Retry--
@@ -105,35 +108,45 @@ func TaskStatus(status chan *Info, outputPath string, wg *sync.WaitGroup) {
 			return
 		}
 	}
-	f, err := os.OpenFile(statusFilename, os.O_CREATE|os.O_RDWR, 0666)
+	statusFilenameFile, err := os.OpenFile(statusFilename, os.O_CREATE|os.O_RDWR, 0666)
 	if err != nil {
 		utils.Printf("Create status file error: %v, %v\n", err, statusFilename)
 		return
 	}
-	defer f.Close()
+	defer statusFilenameFile.Close()
+	
+	status_Filename := outputPath + ".status"
+	status_Filename_f, err := os.OpenFile(status_Filename, os.O_CREATE|os.O_RDWR, 0666)
+	if err != nil {
+		utils.Printf("Create status file error: %v, %v\n", err, status_Filename)
+		return
+	}
+	defer status_Filename_f.Close()
 
 	infos, err := LoadInfos(statusFilename)
 	if err != nil {
 		utils.Printf("LoadInfos: %v\n", err)
 	}
-	
-		
-	speed := &utils.Speed{NTotal: 0, Now: utils.Now()}
-	downInfo := &utils.DownInfo{Output: outputPath}
+
+	speed := &Speed{NTotal: 0, Now: utils.Now()}
+	downInfo := &DownInfo{Output: outputPath}
 	for info := range status {
 		infos[info.Key] = info
-		var downLen, size, chunks, avaible, Error int64
+		var downLen, size, chunks, avaible, Error, Complete int64
 		flag := true
 		for _, val := range infos {
 			size += val.Length
 			downLen += val.DownLen
 			chunks++
-			if val.Status == 0 || val.Status == -1{
+			if val.Status == 0 || val.Status == -1 {
 				avaible++
 				flag = false
 			}
-			if val.Status == -2{
+			if val.Status == -2 {
 				Error++
+			}
+			if val.Status == 1 {
+				Complete++
 			}
 		}
 		if speed.NTotal == 0 {
@@ -144,10 +157,14 @@ func TaskStatus(status chan *Info, outputPath string, wg *sync.WaitGroup) {
 		downInfo.DSize = downLen
 		downInfo.Chunks = chunks
 		downInfo.Avaible = avaible
+		downInfo.Error = Error
+		downInfo.Complete = Complete
 		downInfo.Speed = *speed
 		utils.Printf("Download: %s\n", downInfo)
 		data, _ := json.Marshal(infos)
-		utils.Dumps(f, data)
+		utils.Dumps(statusFilenameFile, data)
+		dataDownInfo, _ := json.Marshal(downInfo)
+		utils.Dumps(status_Filename_f, dataDownInfo)
 		if flag {
 			break
 		}
@@ -208,21 +225,21 @@ func Download(url, outputPath, socks5Url string, newInfoFunc NewInfoFunc) error 
 		if err != nil {
 			return err
 		}
-		
+
 	} else {
 		for _, info := range infos {
-			if info.Status == 0 || info.Status == -2{
+			if info.Status == 0 || info.Status == -2 {
 				info.Status = -1
 				info.Error = ""
 				status <- info
-            }
+			}
 		}
 	}
 
 	go TaskProduce(infos, tasks, status, wg)
 	// 消费请求协程
 	go TaskComsume(httpClient, infos, tasks, status, wg)
-	
+
 	utils.Printf("Wait\n")
 	wg.Wait()
 	utils.Printf("end\n")
@@ -271,7 +288,7 @@ func NewM3u8Infos(httpClient *http.Client, m3u8Url, outpath string, status chan 
 			if err != nil {
 				utils.Printf("Size(%v): %v", uri, err)
 			}
-			<- limit
+			<-limit
 			if length < 0 {
 				length = 0
 			}
@@ -292,7 +309,7 @@ func NewM3u8Infos(httpClient *http.Client, m3u8Url, outpath string, status chan 
 		}(uri, path)
 	}
 	wg.Wait()
-	return infos, nil	
+	return infos, nil
 }
 func ParseM3u8(httpClient *http.Client, m3u8Url, outpath string) ([]map[string]string, error) {
 	uris := make([]map[string]string, 0)
@@ -355,7 +372,7 @@ func ParseM3u8(httpClient *http.Client, m3u8Url, outpath string) ([]map[string]s
 		if strings.HasPrefix(line, "#EXT-X-KEY") {
 			for _, str := range strings.Split(line[10:], ",") {
 				if strings.HasPrefix(str, "URI=") {
-					keyUri := utils.CleanPath(str[5:len(str)-1])
+					keyUri := utils.CleanPath(str[5 : len(str)-1])
 					content = strings.Replace(line, keyUri, utils.BasePath(keyUri), 1)
 					if !strings.HasPrefix(keyUri, "http") {
 						line = utils.CleanPath(line)
@@ -376,8 +393,8 @@ func ParseM3u8(httpClient *http.Client, m3u8Url, outpath string) ([]map[string]s
 			lineUri := line
 			if strings.HasPrefix(line, "http") {
 				content = utils.ResourcePath(line)
-				urlLine , _ := url.Parse(line)
-				if URL.Host == urlLine.Host{
+				urlLine, _ := url.Parse(line)
+				if URL.Host == urlLine.Host {
 					content = urlLine.Path
 					if strings.HasPrefix(urlLine.Path, utils.Dirname(URL.Path)) {
 						content = urlLine.Path[len(utils.Dirname(URL.Path))+1:]
@@ -390,7 +407,7 @@ func ParseM3u8(httpClient *http.Client, m3u8Url, outpath string) ([]map[string]s
 					lineUri = utils.Format("%s://%s%s", URL.Scheme, URL.Host, line)
 					content = line[1:]
 					if strings.HasPrefix(line, utils.Dirname(URL.Path)) {
-						content = line[len(utils.Dirname(URL.Path)) + 1:]
+						content = line[len(utils.Dirname(URL.Path))+1:]
 					}
 				}
 			}
@@ -415,7 +432,7 @@ func ParseM3u8(httpClient *http.Client, m3u8Url, outpath string) ([]map[string]s
 
 func NewFileInfos(httpClient *http.Client, url, outpath string, status chan *Info) (map[string]*Info, error) {
 	resp, err := httpClient.Head(url)
-	if err != nil {		
+	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -435,9 +452,9 @@ func NewFileInfos(httpClient *http.Client, url, outpath string, status chan *Inf
 		defer out.Close()
 		out.Truncate(length)
 	}
-	chunkSize := int64(6059)
+	chunkSize := int64(60590)
 	chunks := length / chunkSize
-	if length % chunkSize != 0 {
+	if length%chunkSize != 0 {
 		chunks++
 	}
 	infos := make(map[string]*Info, chunks)
@@ -445,7 +462,7 @@ func NewFileInfos(httpClient *http.Client, url, outpath string, status chan *Inf
 		start := index * chunkSize
 		end := (index+1)*chunkSize - 1
 		if end > length {
-			end = length
+			end = length-1
 		}
 		key := utils.Format("%v", index)
 		infos[key] = &Info{
@@ -477,7 +494,6 @@ func NewFileInfos(httpClient *http.Client, url, outpath string, status chan *Inf
 	}
 	return infos, nil
 }
-
 
 func GenHttpClient(socks5Url string) (*http.Client, error) {
 	// 创建一个自定义的 http.Client 并禁用证书验证
@@ -516,17 +532,19 @@ func proxyConn(socks5Url string) (proxy.Dialer, error) {
 }
 
 type FBFunc func(Info)
-// type ReadBodyParams struct {
-// 	chunk_size int64 // = 1024 * 1024 * 10
-// 	fsize      int64 // = resp.ContentLength
-// 	buf              // = make([]byte, chunk_size)
-// 	written    int64
-// }
 
+//	type ReadBodyParams struct {
+//		chunk_size int64 // = 1024 * 1024 * 10
+//		fsize      int64 // = resp.ContentLength
+//		buf              // = make([]byte, chunk_size)
+//		written    int64
+//	}
+//
+// 这部分需要修改
 func ReadBody(resp *http.Response, out *os.File, processFb FBFunc) error {
 	// defer trace()()
 	var (
-		chunk_size int64 = 1024 // * 1024 * 10
+		chunk_size int64 = 10 *1024 // * 1024
 		fsize      int64 = resp.ContentLength
 		buf              = make([]byte, chunk_size)
 		written    int64
@@ -544,14 +562,14 @@ func ReadBody(resp *http.Response, out *os.File, processFb FBFunc) error {
 			//写入出错
 			if ew != nil {
 				if processFb != nil {
-					processFb(Info{Output: out.Name(), Length: fsize, DownLen: written, Error: utils.Format("write error: %v", ew)})
+					processFb(Info{Output: out.Name(), Length: fsize, DownLen: int64(nr), Error: utils.Format("write error: %v", ew)})
 				}
 				return ew
 			}
 			//读取是数据长度不等于写入的数据长度
 			if nr != nw {
 				if processFb != nil {
-					processFb(Info{Output: out.Name(), Length: fsize, DownLen: written, Error: utils.Format("write error: %v", io.ErrShortWrite)})
+					processFb(Info{Output: out.Name(), Length: fsize, DownLen: int64(nr), Error: utils.Format("write error: %v", io.ErrShortWrite)})
 				}
 				return io.ErrShortWrite
 			}
@@ -559,23 +577,22 @@ func ReadBody(resp *http.Response, out *os.File, processFb FBFunc) error {
 		if er != nil {
 			if er != io.EOF {
 				if processFb != nil {
-					processFb(Info{Output: out.Name(), Length: fsize, DownLen: written, Error: utils.Format("read error: %v", er)})
+					processFb(Info{Output: out.Name(), Length: fsize, DownLen: int64(nr), Error: utils.Format("read error: %v", er)})
 				}
 				return er
 			}
 			if processFb != nil {
-				processFb(Info{Output: out.Name(), Length: fsize, DownLen: written})
+				processFb(Info{Output: out.Name(), Length: fsize, DownLen: int64(nr)})
 			}
 			break
 		}
 		//没有错误了快使用 callback
 		if processFb != nil {
-			processFb(Info{Output: out.Name(), Length: fsize, DownLen: written})
+			processFb(Info{Output: out.Name(), Length: fsize, DownLen: int64(nr)})
 		}
 	}
 	return nil
 }
-
 
 type Info struct {
 	Key     string  `json: key`
@@ -583,7 +600,7 @@ type Info struct {
 	Length  int64   `json: length`
 	DownLen int64   `json: downLen`
 	Scale   float64 `json: scale`
-	Error   string   `json: error`
+	Error   string  `json: error`
 	Start   int64   `json: start`
 	End     int64   `json: end`
 	Status  int64   `json: status`
@@ -594,4 +611,61 @@ type Info struct {
 func (info Info) String() string {
 	return utils.Format("Info{Url: %v, Length: %v, downLen: %v, scale: %v, error: %v, start: %v, end: %v, status: %v, output: %v, Retry: %v}",
 		info.Url, info.Length, info.DownLen, info.Scale, info.Error, info.Start, info.End, info.Status, info.Output, info.Retry)
+}
+
+
+type DownInfo struct {
+	Output	string	`json: output`
+	Chunks	int64	`json: chunks`
+	Avaible	int64	`json: avaible`
+	Complete	int64	`json: complete`
+	Error	int64	`json: error`
+	Size	int64	`json: size`
+	DSize	int64	`json: dsize`
+	Speed	Speed	`json: speed`
+}
+
+func (d *DownInfo) String() string {
+	persent := 0.0
+	if d.Size > 0 {
+		persent = float64(d.DSize) / float64(d.Size) * 100.0
+	}
+	return utils.Format("Output: %s, Chunks: %d, Avaible: %d, Size: %d, DSize: %d, Speed: %s\t%.2f%%", d.Output, d.Chunks, d.Avaible, d.Size, d.DSize, d.Speed.Val, persent)
+}
+
+type Speed struct {
+	NTotal 	int64	`json: nTotal`
+	LTotal 	int64	`lTotal`
+	Now  	float64	`json: now`
+	Last 	float64	`json: last`
+	Val		string	`json: val`
+}
+
+func (s *Speed) Update(total int64) {
+	s.LTotal = s.NTotal
+	s.Last = s.Now
+	
+	now := utils.Now()
+	if now - s.Last > 500 {
+		s.NTotal = total
+		s.Now = now
+		bytes := float64(s.NTotal - s.LTotal) / (s.Now - s.Last) * float64(1000)
+		// Printf("Now - Last: %.2f, bytes: %.2f\n", s.Now - s.Last, bytes)
+		if float64(bytes) < float64(1024) {
+			s.Val = utils.Format("%.2fB/s", float64(bytes))
+		} else if float64(bytes) / 1024.0 < float64(1024) {
+			s.Val = utils.Format("%.2fKB/s", float64(bytes) / 1024.0)
+		} else if float64(bytes) / 1024.0 / 1024.0 < float64(1024) {
+			s.Val = utils.Format("%.2fMB/s", float64(bytes) / 1024.0 / 1024.0)
+		} else {
+			s.Val = utils.Format("%.2fGB/s", float64(bytes) / 1024.0 / 1024.0 / 1024.0)
+		}
+	}
+}
+
+func (s *Speed) String() string {
+	if s.Val == "" {
+		return "0B/s"
+	} 
+	return s.Val
 }
